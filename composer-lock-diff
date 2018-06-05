@@ -4,28 +4,26 @@
 $opts = parseOpts();
 
 $prod = diff('packages', $opts['from'], $opts['to'], $opts['path']);
-$dev = diff('packages-dev', $opts['from'], $opts['to'], $opts['path']);
 
-if ($opts['json']) {
-    $json_opts = ($opts['pretty']) ? JSON_PRETTY_PRINT : 0;
-    print json_encode(array('changes' => $prod, 'changes-dev' => $dev), $json_opts);
-    return;
+$changeLog = '';
+
+$out = "# " . $opts['new-version'] . PHP_EOL;
+$out .= shell_exec('git log ' .  $opts['old-version'] . '..' . $opts['new-version'] . ' --pretty=format:"* %s | %an - %ci | Hash: %h" --abbrev-commit --date=local');
+
+$changeLog .= $out . PHP_EOL;
+
+foreach ($prod as $package => $commits) {
+    $path = explode('/', $package);
+    $path = str_replace('-', '_', $path[1]);
+    
+    if(is_dir('typo3conf/ext/' . $path)) {
+        $out = shell_exec('git --git-dir typo3conf/ext/' . $path . '/.git log ' .  $commits[0] . '..' . $commits[1] . ' --pretty=format:"* %s | %an - %ci | Hash: %h" --abbrev-commit --date=local');
+        $changeLog .= "###### " . $path . PHP_EOL . $out . PHP_EOL . PHP_EOL;
+    }
+    
 }
 
-$table_opts = array(
-    'no-links' => $opts['no-links'],
-);
-
-if ($opts['md']) {
-    $table_opts = array_merge($table_opts, array(
-        'capped' => false,
-        'joint' => '|',
-        'url_formatter' => 'urlFormatterMd',
-    ));
-}
-
-print tableize('Production Changes', $prod, $table_opts);
-print tableize('Dev Changes', $dev, $table_opts);
+file_put_contents('CHANGELOG.md', $changeLog, FILE_APPEND);
 
 function diff($key, $from, $to, $base_path) {
 
@@ -67,75 +65,6 @@ function version($pkg)
     return $version;
 }
 
-function tableize($header, $data, $opts = array()) {
-    if (empty($data)) return '';
-
-    $opts = array_merge(array('capped' => true, 'joint' => '+'), $opts);
-
-    if ($opts['no-links']) {
-        array_walk($data, function(&$values) {
-            unset($values[2]);
-        });
-    } else {
-        if (array_key_exists('url_formatter', $opts)) {
-            $formatter = $opts['url_formatter'];
-            array_walk($data, function(&$values) use ($formatter) {
-                $values[2] = call_user_func($formatter, $values[2], '...');
-            });
-        }
-    }
-
-    $titles = array($header, 'From', 'To');
-    if (! $opts['no-links']) array_push($titles, 'Compare');
-
-    $widths = array(maxLength(array_merge(array($header), array_keys($data))));
-
-    $count = count(reset($data));
-    for($i = 0; $i < $count; $i++) {
-        $widths[] = max(strlen($titles[$i + 1]), maxLength(array_map(function($k) use ($data, $i) { return $data[$k][$i]; }, array_keys($data))));
-    }
-
-    if ($opts['capped']) {
-        $lines[] = separatorLine($widths, $opts['joint']);
-    }
-
-    $lines[] = tabelizeLine($titles, $widths);
-    $lines[] = separatorLine($widths, $opts['joint']);
-
-    foreach($data as $key => $v) {
-        $lines[] = tabelizeLine(array_merge(array($key), $v), $widths);
-    }
-
-    if ($opts['capped']) {
-        $lines[] = separatorLine($widths, $opts['joint']);
-    }
-
-    return implode(PHP_EOL, array_filter($lines)) . PHP_EOL . PHP_EOL;
-}
-
-function separatorLine($widths, $joint) {
-    return $joint . implode($joint, array_map(function($n) { return str_repeat('-', $n + 2); }, $widths)) . $joint;
-}
-
-function maxLength(array $array) {
-    return max(array_map('strlen', $array));
-}
-
-function tabelizeLine($data, $widths) {
-    $fields = array();
-    $count = max(array(count($data), count($widths)));
-    for($i = 0; $i < $count; $i++) {
-        $value = ($i >= count($data)) ? '' : $data[$i];
-        $width = ($i >= count($widths)) ? strlen($value) : $widths[$i];
-        $fields[] = sprintf("%-{$width}s", $value);
-    }
-    return '| ' . implode(' | ', $fields) . ' |';
-}
-
-function urlFormatterMd($url, $text) {
-    if (empty($url)) return '';
-    return sprintf('[%s](%s)', $text, $url);
-}
 
 function load($fileish, $base_path = '') {
     $orig = $fileish;
@@ -221,7 +150,7 @@ function formatCompareGitlab($url, $from, $to) {
 }
 
 function parseOpts() {
-    $given = getopt('hp:', array('path:', 'from:', 'to:', 'md', 'json', 'pretty', 'no-links', 'help'));
+    $given = getopt('hp:', array('path:', 'from:', 'to:', 'old-version:', 'new-version:', 'md', 'json', 'pretty', 'no-links', 'help'));
 
     foreach(array('help' => 'h', 'path' => 'p') as $long => $short) {
         if (array_key_exists($short, $given)) {
@@ -239,6 +168,8 @@ function parseOpts() {
         'from' => array_key_exists('from', $given) ? $given['from'] : 'HEAD',
         'to' => array_key_exists('to', $given) ? $given['to'] : '',
         'md' => array_key_exists('md', $given),
+        'old-version' => array_key_exists('old-version', $given) ? $given['old-version'] : false,
+        'new-version' => array_key_exists('new-version', $given) ? $given['new-version'] : false,
         'json' => array_key_exists('json', $given),
         'pretty' => version_compare(PHP_VERSION, '5.4.0', '>=') && array_key_exists('pretty', $given),
         'no-links' => array_key_exists('no-links', $given),
